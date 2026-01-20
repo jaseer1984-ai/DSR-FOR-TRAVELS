@@ -1,14 +1,96 @@
 import os
 from datetime import date
+
 import streamlit as st
 import pandas as pd
 import bcrypt
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-APP_TITLE = "✈️ Travel Agency DSR "
+APP_TITLE = "✈️ Travel Agency DSR (Sales • Refund • Receipt • ADM)"
 st.set_page_config(page_title="Travel DSR", layout="wide")
 st.title(APP_TITLE)
+
+# =========================
+# COLORFUL UI (CSS)
+# =========================
+st.markdown(
+    """
+<style>
+/* Page background */
+.stApp {
+    background: linear-gradient(180deg, #f6f8ff 0%, #ffffff 60%);
+}
+
+/* Title */
+h1 {
+    color: #1f2a44 !important;
+    font-weight: 900 !important;
+}
+
+/* Card container */
+.dsr-card {
+    background: #ffffff;
+    border: 1px solid #e8ecff;
+    border-radius: 18px;
+    padding: 18px 18px 10px 18px;
+    box-shadow: 0 6px 18px rgba(31, 42, 68, 0.08);
+    margin-bottom: 14px;
+}
+
+/* Section header */
+.dsr-header {
+    background: linear-gradient(90deg, #3b82f6 0%, #8b5cf6 50%, #ec4899 100%);
+    color: white;
+    border-radius: 14px;
+    padding: 10px 14px;
+    font-weight: 800;
+    letter-spacing: 0.2px;
+    margin-bottom: 12px;
+}
+
+/* Inputs */
+div[data-baseweb="input"] > div,
+div[data-baseweb="textarea"] > div,
+div[data-baseweb="select"] > div {
+    border-radius: 14px !important;
+    border: 1px solid #dbe3ff !important;
+}
+
+/* Focus glow */
+div[data-baseweb="input"] > div:focus-within,
+div[data-baseweb="textarea"] > div:focus-within,
+div[data-baseweb="select"] > div:focus-within {
+    border: 1px solid #3b82f6 !important;
+    box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15) !important;
+}
+
+/* Buttons */
+.stButton > button, .stDownloadButton > button {
+    background: linear-gradient(90deg, #3b82f6 0%, #8b5cf6 60%, #ec4899 100%) !important;
+    color: white !important;
+    border: 0 !important;
+    border-radius: 14px !important;
+    padding: 10px 14px !important;
+    font-weight: 800 !important;
+    box-shadow: 0 8px 16px rgba(59, 130, 246, 0.18);
+}
+.stButton > button:hover, .stDownloadButton > button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 18px rgba(59, 130, 246, 0.22);
+}
+
+/* Sidebar */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #111827 0%, #1f2a44 100%);
+}
+section[data-testid="stSidebar"] * {
+    color: #e5e7eb !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
 
 # =========================
@@ -28,22 +110,16 @@ if not DATABASE_URL:
 
 def _normalize_db_url(url: str) -> str:
     url = url.strip().strip('"').strip("'")
-
-    # remove channel_binding
     url = url.replace("&channel_binding=require", "")
     url = url.replace("?channel_binding=require", "?")
     url = url.replace("?&", "?").replace("??", "?")
     if url.endswith("?") or url.endswith("&"):
         url = url[:-1]
-
-    # ensure sslmode=require
     if "sslmode=" not in url:
         url = url + ("&sslmode=require" if "?" in url else "?sslmode=require")
-
     url = url.replace("?&", "?")
     if url.endswith("?") or url.endswith("&"):
         url = url[:-1]
-
     return url
 
 
@@ -74,7 +150,6 @@ def init_db():
         );
         """)
 
-        # Opening outstanding per staff (optional)
         cur.execute("""
         CREATE TABLE IF NOT EXISTS opening_outstanding (
             staff_user_id INTEGER PRIMARY KEY REFERENCES users(id),
@@ -83,7 +158,6 @@ def init_db():
         );
         """)
 
-        # One table for ALL entries: SALE/REFUND/RECEIPT/ADM
         cur.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
             id SERIAL PRIMARY KEY,
@@ -98,7 +172,7 @@ def init_db():
             route TEXT,
             supplier TEXT,
 
-            reference_no TEXT,   -- receipt no / adm ref / anything
+            reference_no TEXT,
             notes TEXT,
 
             basic_fare NUMERIC(14,2) NOT NULL DEFAULT 0,
@@ -190,7 +264,7 @@ def set_user_active(user_id: int, active: bool):
 
 
 # =========================
-# OUTSTANDING LOGIC
+# OUTSTANDING
 # =========================
 def set_opening_outstanding(staff_id: int, amount: float):
     conn = get_conn()
@@ -219,15 +293,7 @@ def get_opening_outstanding(staff_id: int) -> float:
 
 
 def compute_outstanding(staff_id: int) -> float:
-    """
-    Outstanding effect rules:
-    - SALE: outstanding += bill_to_customer
-    - REFUND: outstanding -= bill_to_customer (we store bill_to_customer as positive for refund input)
-    - RECEIPT: outstanding -= receipt_amount
-    - ADM: outstanding += adm_amount
-    """
     opening = get_opening_outstanding(staff_id)
-
     conn = get_conn()
     try:
         cur = conn.cursor()
@@ -269,7 +335,7 @@ def add_transaction(
     net_to_supp: float = 0,
     bill_to_customer: float = 0,
     receipt_amount: float = 0,
-    adm_amount: float = 0
+    adm_amount: float = 0,
 ):
     conn = get_conn()
     try:
@@ -443,12 +509,17 @@ if "user" not in st.session_state:
 # =========================
 if not users_exist():
     st.warning("First time setup: Create ADMIN account")
+    st.markdown('<div class="dsr-card">', unsafe_allow_html=True)
+    st.markdown('<div class="dsr-header">👑 Create Admin</div>', unsafe_allow_html=True)
+
     with st.form("create_admin"):
         a_user = st.text_input("Admin Username")
         a_name = st.text_input("Admin Name")
         a_pass = st.text_input("Admin Password", type="password")
         a_pass2 = st.text_input("Confirm Password", type="password")
         ok = st.form_submit_button("Create Admin")
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
     if ok:
         if not a_user or not a_name or not a_pass:
@@ -469,8 +540,13 @@ if not users_exist():
 # =========================
 if st.session_state.user is None:
     st.subheader("Login")
+
+    st.markdown('<div class="dsr-card">', unsafe_allow_html=True)
+    st.markdown('<div class="dsr-header">🔐 Login</div>', unsafe_allow_html=True)
+
     u = st.text_input("Username")
     p = st.text_input("Password", type="password")
+
     if st.button("Login"):
         user = verify_login(u, p)
         if user:
@@ -478,12 +554,19 @@ if st.session_state.user is None:
             st.rerun()
         else:
             st.error("Invalid login or user inactive.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
 
 user = st.session_state.user
 
+
+# =========================
+# SIDEBAR NAV
+# =========================
 with st.sidebar:
+    st.markdown("### ✅ Session")
     st.markdown(f"**User:** {user['staff_name']}")
     st.markdown(f"**Role:** {user['role']}")
     if st.button("Logout"):
@@ -500,19 +583,18 @@ with st.sidebar:
 # STAFF UI
 # =========================
 if user["role"] == "staff":
-    # top info
-    out = compute_outstanding(user["id"])
     st.markdown("### Staff Dashboard")
-    st.info(f"**Outstanding (Your account): {out:,.2f}**")
+    out = compute_outstanding(user["id"])
+    st.success(f"💼 **Your Outstanding: {out:,.2f}**")
 
     if menu == "New Entry":
-        st.markdown("### Add Entry")
+        st.markdown('<div class="dsr-card">', unsafe_allow_html=True)
+        st.markdown('<div class="dsr-header">🧾 New Entry</div>', unsafe_allow_html=True)
+
         entry_type = st.selectbox("Entry Type", ["SALE", "REFUND", "RECEIPT", "ADM"])
 
         with st.form("entry_form"):
             txn_date = st.date_input("Date", value=date.today())
-
-            # Shared fields
             notes = st.text_input("Notes (optional)")
 
             if entry_type in ["SALE", "REFUND"]:
@@ -538,7 +620,6 @@ if user["role"] == "staff":
                 reference_no = st.text_input("Receipt No / Ref No *")
                 receipt_amount = st.number_input("Receipt Amount *", min_value=0.0, step=10.0)
 
-                # keep others empty
                 ai_code = ticket_number = passenger_name = route = supplier = ""
                 basic_fare = comm = net_to_supp = bill_to_customer = 0.0
                 adm_amount = 0.0
@@ -554,8 +635,9 @@ if user["role"] == "staff":
 
             save = st.form_submit_button("Save Entry")
 
+        st.markdown("</div>", unsafe_allow_html=True)
+
         if save:
-            # Validation
             if entry_type in ["SALE", "REFUND"]:
                 if not ai_code.strip() or not ticket_number.strip() or not passenger_name.strip():
                     st.error("AI Code, Ticket Number, Passenger Name are required.")
@@ -576,7 +658,7 @@ if user["role"] == "staff":
                         net_to_supp=net_to_supp,
                         bill_to_customer=bill_to_customer,
                         receipt_amount=receipt_amount,
-                        adm_amount=adm_amount
+                        adm_amount=adm_amount,
                     )
                     st.success("Saved ✅")
                     st.rerun()
@@ -591,7 +673,7 @@ if user["role"] == "staff":
                         entry_type=entry_type,
                         reference_no=reference_no,
                         notes=notes,
-                        receipt_amount=receipt_amount
+                        receipt_amount=receipt_amount,
                     )
                     st.success("Receipt saved ✅ Outstanding updated.")
                     st.rerun()
@@ -606,13 +688,15 @@ if user["role"] == "staff":
                         entry_type=entry_type,
                         reference_no=reference_no,
                         notes=notes,
-                        adm_amount=adm_amount
+                        adm_amount=adm_amount,
                     )
                     st.success("ADM saved ✅ Outstanding updated.")
                     st.rerun()
 
     else:  # My Report
-        st.markdown("### My Report")
+        st.markdown('<div class="dsr-card">', unsafe_allow_html=True)
+        st.markdown('<div class="dsr-header">📊 My Report</div>', unsafe_allow_html=True)
+
         c1, c2 = st.columns(2)
         with c1:
             start = st.date_input("From", value=date.today().replace(day=1), key="my_from")
@@ -622,13 +706,14 @@ if user["role"] == "staff":
         df = my_transactions_df(user["id"], start, end)
         st.dataframe(df, use_container_width=True)
 
-        export = df.copy()
         st.download_button(
             "Download My CSV",
-            data=export.to_csv(index=False).encode("utf-8"),
+            data=df.to_csv(index=False).encode("utf-8"),
             file_name="my_report.csv",
-            mime="text/csv"
+            mime="text/csv",
         )
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # =========================
@@ -638,7 +723,9 @@ else:
     st.markdown("## Admin Dashboard")
 
     if menu == "All Transactions":
-        st.markdown("### All Transactions")
+        st.markdown('<div class="dsr-card">', unsafe_allow_html=True)
+        st.markdown('<div class="dsr-header">🧾 All Transactions</div>', unsafe_allow_html=True)
+
         c1, c2, c3 = st.columns(3)
         with c1:
             text_filter = st.text_input("Filter (staff/user/ticket/ref)")
@@ -654,11 +741,16 @@ else:
             "Download CSV (Filtered)",
             data=df.to_csv(index=False).encode("utf-8"),
             file_name="all_transactions.csv",
-            mime="text/csv"
+            mime="text/csv",
         )
 
+        st.markdown("</div>", unsafe_allow_html=True)
+
     elif menu == "Users":
-        st.markdown("### Create Staff User")
+        st.markdown('<div class="dsr-card">', unsafe_allow_html=True)
+        st.markdown('<div class="dsr-header">👥 Users</div>', unsafe_allow_html=True)
+
+        st.markdown("#### Create Staff User")
         with st.form("create_staff"):
             nu = st.text_input("Username (login)")
             nn = st.text_input("Staff Name")
@@ -676,21 +768,20 @@ else:
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-        st.markdown("### Users List")
+        st.markdown("#### Users List")
         users_df = list_users()
-
         display_df = users_df.rename(columns={
             "id": "ID",
             "username": "Username",
             "staff_name": "Staff Name",
             "role": "Role",
-            "active": "Active",
-            "created_at": "Created At"
+            "active": "Status",
+            "created_at": "Created At",
         })
-        display_df["Active"] = display_df["Active"].apply(lambda x: "Active" if x else "Inactive")
+        display_df["Status"] = display_df["Status"].apply(lambda x: "Active" if x else "Inactive")
         st.dataframe(display_df, use_container_width=True)
 
-        st.markdown("### Activate / Deactivate User")
+        st.markdown("#### Activate / Deactivate User")
         if not users_df.empty:
             user_map = {f"{r['staff_name']} ({r['username']})": int(r["id"]) for _, r in users_df.iterrows()}
             selected = st.selectbox("Select User", list(user_map.keys()))
@@ -702,7 +793,7 @@ else:
                 st.success("Updated ✅")
                 st.rerun()
 
-        st.markdown("### Set Opening Outstanding (per staff)")
+        st.markdown("#### Opening Outstanding (per staff)")
         staff_only = users_df[users_df["role"] == "staff"].copy()
         if not staff_only.empty:
             staff_map = {f"{r['staff_name']} ({r['username']})": int(r["id"]) for _, r in staff_only.iterrows()}
@@ -715,8 +806,12 @@ else:
                 st.success("Saved ✅")
                 st.rerun()
 
+        st.markdown("</div>", unsafe_allow_html=True)
+
     else:  # Outstanding Summary
-        st.markdown("### Outstanding Summary (All Staff)")
+        st.markdown('<div class="dsr-card">', unsafe_allow_html=True)
+        st.markdown('<div class="dsr-header">💰 Outstanding Summary</div>', unsafe_allow_html=True)
+
         summ = outstanding_summary_df()
         st.dataframe(summ, use_container_width=True)
 
@@ -724,6 +819,7 @@ else:
             "Download Outstanding Summary CSV",
             data=summ.to_csv(index=False).encode("utf-8"),
             file_name="outstanding_summary.csv",
-            mime="text/csv"
+            mime="text/csv",
         )
 
+        st.markdown("</div>", unsafe_allow_html=True)
