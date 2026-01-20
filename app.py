@@ -413,20 +413,13 @@ if user["role"] == "staff":
         df = staff_tickets_df(user["id"], start, end)
         st.dataframe(df, use_container_width=True)
 
-        if not df.empty:
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Basic Fare", f"{df['Basic Fare'].sum():,.2f}")
-            k2.metric("Comm", f"{df['Comm'].sum():,.2f}")
-            k3.metric("Net to supp", f"{df['Net to supp'].sum():,.2f}")
-            k4.metric("Bill to Customer", f"{df['Bill to Customer'].sum():,.2f}")
-
-            export = df.drop(columns=["created_at"], errors="ignore")
-            st.download_button(
-                "Download My CSV",
-                data=export.to_csv(index=False).encode("utf-8"),
-                file_name="my_ticketing.csv",
-                mime="text/csv"
-            )
+        export = df.drop(columns=["created_at"], errors="ignore")
+        st.download_button(
+            "Download My CSV",
+            data=export.to_csv(index=False).encode("utf-8"),
+            file_name="my_ticketing.csv",
+            mime="text/csv"
+        )
 
 
 # -------------------- ADMIN UI --------------------
@@ -447,20 +440,13 @@ else:
         df = all_tickets_df(start, end, staff_filter)
         st.dataframe(df, use_container_width=True)
 
-        if not df.empty:
-            a1, a2, a3, a4 = st.columns(4)
-            a1.metric("Basic Fare", f"{df['Basic Fare'].sum():,.2f}")
-            a2.metric("Comm", f"{df['Comm'].sum():,.2f}")
-            a3.metric("Net to supp", f"{df['Net to supp'].sum():,.2f}")
-            a4.metric("Bill to Customer", f"{df['Bill to Customer'].sum():,.2f}")
-
-            export = df.drop(columns=["created_at"], errors="ignore")
-            st.download_button(
-                "Download CSV (Filtered)",
-                data=export.to_csv(index=False).encode("utf-8"),
-                file_name="all_ticketing_filtered.csv",
-                mime="text/csv"
-            )
+        export = df.drop(columns=["created_at"], errors="ignore")
+        st.download_button(
+            "Download CSV (Filtered)",
+            data=export.to_csv(index=False).encode("utf-8"),
+            file_name="all_ticketing_filtered.csv",
+            mime="text/csv"
+        )
 
     with tab2:
         st.markdown("### Create Staff User")
