@@ -7,7 +7,7 @@ import bcrypt
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-APP_TITLE = "✈️ Travel Agency DSR (Sales • Refund • Receipt • ADM)"
+APP_TITLE = "✈️ Travel Agency DSR "
 st.set_page_config(page_title="Travel DSR", layout="wide")
 st.title(APP_TITLE)
 
@@ -823,3 +823,4 @@ else:
         )
 
         st.markdown("</div>", unsafe_allow_html=True)
+
