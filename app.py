@@ -8,7 +8,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 
-APP_TITLE = "✈️ Ticketing Daily Entry (Sales + Refund)"
+APP_TITLE = "✈️ Ticketing Daily Entry"
 st.set_page_config(page_title="Ticketing App", layout="wide")
 st.title(APP_TITLE)
 
@@ -479,3 +479,4 @@ else:
                 set_user_active(int(uid), bool(active))
                 st.success("Updated ✅")
                 st.rerun()
+
