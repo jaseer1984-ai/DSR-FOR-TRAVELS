@@ -87,6 +87,16 @@ section[data-testid="stSidebar"] {
 section[data-testid="stSidebar"] * {
     color: #e5e7eb !important;
 }
+
+/* Center login card */
+.login-container {
+    max-width: 420px;
+    margin: 60px auto;
+}
+.login-container .stButton > button {
+    width: 100% !important;
+    font-size: 16px !important;
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -509,6 +519,8 @@ if "user" not in st.session_state:
 # =========================
 if not users_exist():
     st.warning("First time setup: Create ADMIN account")
+
+    st.markdown('<div class="login-container">', unsafe_allow_html=True)
     st.markdown('<div class="dsr-card">', unsafe_allow_html=True)
     st.markdown('<div class="dsr-header">👑 Create Admin</div>', unsafe_allow_html=True)
 
@@ -519,6 +531,7 @@ if not users_exist():
         a_pass2 = st.text_input("Confirm Password", type="password")
         ok = st.form_submit_button("Create Admin")
 
+    st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     if ok:
@@ -536,18 +549,19 @@ if not users_exist():
 
 
 # =========================
-# LOGIN
+# LOGIN (SMALL WIDTH)
 # =========================
 if st.session_state.user is None:
     st.subheader("Login")
 
+    st.markdown('<div class="login-container">', unsafe_allow_html=True)
     st.markdown('<div class="dsr-card">', unsafe_allow_html=True)
     st.markdown('<div class="dsr-header">🔐 Login</div>', unsafe_allow_html=True)
 
     u = st.text_input("Username")
     p = st.text_input("Password", type="password")
 
-    if st.button("Login"):
+    if st.button("🔐 Login"):
         user = verify_login(u, p)
         if user:
             st.session_state.user = user
@@ -556,11 +570,11 @@ if st.session_state.user is None:
             st.error("Invalid login or user inactive.")
 
     st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
 
 user = st.session_state.user
-
 
 # =========================
 # SIDEBAR NAV
@@ -823,5 +837,3 @@ else:
         )
 
         st.markdown("</div>", unsafe_allow_html=True)
-
-
