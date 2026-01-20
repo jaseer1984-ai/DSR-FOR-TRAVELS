@@ -1,93 +1,162 @@
 import os
+from datetime import date
+
 import streamlit as st
 import pandas as pd
 import bcrypt
-from datetime import date
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-# -------------------- CONFIG --------------------
-APP_TITLE = "✈️ Ticketing Daily Entry"
-# Use Streamlit Cloud Secrets first, then env var
-DATABASE_URL = None
-if hasattr(st, "secrets") and "DATABASE_URL" in st.secrets:
-    DATABASE_URL = st.secrets["DATABASE_URL"]
-DATABASE_URL = DATABASE_URL or os.getenv("DATABASE_URL")
 
-# -------------------- DB HELPERS --------------------
+APP_TITLE = "✈️ Ticketing Daily Entry (Sales + Refund)"
+st.set_page_config(page_title="Ticketing App", layout="wide")
+st.title(APP_TITLE)
+
+
+# -------------------- SETTINGS / SECRETS --------------------
+def read_database_url() -> str | None:
+    # Streamlit Cloud Secrets first, then env var
+    if hasattr(st, "secrets") and "DATABASE_URL" in st.secrets:
+        return str(st.secrets["DATABASE_URL"]).strip()
+    return os.getenv("DATABASE_URL")
+
+
+DATABASE_URL = read_database_url()
+
+if not DATABASE_URL:
+    st.error("DATABASE_URL is missing. Add it in Streamlit Cloud → Settings → Secrets.")
+    st.stop()
+
+
+# -------------------- DB CONNECTION --------------------
+def _normalize_db_url(url: str) -> str:
+    """
+    Ensure SSL is required. Remove channel_binding param (can break some environments).
+    """
+    url = url.strip().strip('"').strip("'")
+
+    # Remove channel_binding if present
+    if "channel_binding=require" in url:
+        # Remove &channel_binding=require or ?channel_binding=require
+        url = url.replace("&channel_binding=require", "")
+        url = url.replace("?channel_binding=require", "?")
+        url = url.replace("?&", "?").replace("??", "?")
+        if url.endswith("?"):
+            url = url[:-1]
+
+    # Ensure sslmode=require exists
+    if "sslmode=" not in url:
+        if "?" in url:
+            url = url + "&sslmode=require"
+        else:
+            url = url + "?sslmode=require"
+
+    # Clean possible trailing ? or &
+    url = url.replace("?&", "?")
+    if url.endswith("&") or url.endswith("?"):
+        url = url[:-1]
+
+    return url
+
+
+DATABASE_URL = _normalize_db_url(DATABASE_URL)
+
+
 def get_conn():
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL is not set. Add it in Streamlit secrets.")
-    return psycopg2.connect(DATABASE_URL)
+    """
+    Create a new connection per call (safe for Streamlit Cloud).
+    """
+    # Explicit sslmode in connect too (extra safety)
+    return psycopg2.connect(DATABASE_URL, sslmode="require")
+
 
 def init_db():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL,
-                password_hash BYTEA NOT NULL,
-                role TEXT NOT NULL CHECK(role IN ('admin','staff')),
-                staff_name TEXT NOT NULL,
-                active BOOLEAN NOT NULL DEFAULT TRUE,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            );
-            """)
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
 
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS tickets (
-                id SERIAL PRIMARY KEY,
-                staff_user_id INTEGER NOT NULL REFERENCES users(id),
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash BYTEA NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('admin','staff')),
+            staff_name TEXT NOT NULL,
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+        """)
 
-                travel_date DATE NOT NULL,
-                ai_code TEXT NOT NULL,
-                ticket_number TEXT NOT NULL,
-                passenger_name TEXT NOT NULL,
-                route TEXT,
-                supplier TEXT,
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS tickets (
+            id SERIAL PRIMARY KEY,
+            staff_user_id INTEGER NOT NULL REFERENCES users(id),
 
-                txn_type TEXT NOT NULL CHECK(txn_type IN ('SALE','REFUND')),
-                basic_fare NUMERIC(14,2) NOT NULL DEFAULT 0,
-                comm NUMERIC(14,2) NOT NULL DEFAULT 0,
-                net_to_supp NUMERIC(14,2) NOT NULL DEFAULT 0,
-                bill_to_customer NUMERIC(14,2) NOT NULL DEFAULT 0,
+            travel_date DATE NOT NULL,
+            ai_code TEXT NOT NULL,
+            ticket_number TEXT NOT NULL,
+            passenger_name TEXT NOT NULL,
+            route TEXT,
+            supplier TEXT,
 
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            );
-            """)
+            txn_type TEXT NOT NULL CHECK(txn_type IN ('SALE','REFUND')),
+            basic_fare NUMERIC(14,2) NOT NULL DEFAULT 0,
+            comm NUMERIC(14,2) NOT NULL DEFAULT 0,
+            net_to_supp NUMERIC(14,2) NOT NULL DEFAULT 0,
+            bill_to_customer NUMERIC(14,2) NOT NULL DEFAULT 0,
 
-def users_exist():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM users;")
-            return cur.fetchone()[0] > 0
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+        """)
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def users_exist() -> bool:
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users;")
+        return cur.fetchone()[0] > 0
+    finally:
+        conn.close()
+
 
 def create_user(username: str, password: str, role: str, staff_name: str):
     pw_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO users(username, password_hash, role, staff_name) VALUES (%s,%s,%s,%s)",
-                (username.strip(), pw_hash, role, staff_name.strip())
-            )
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO users(username, password_hash, role, staff_name) VALUES (%s,%s,%s,%s)",
+            (username.strip(), psycopg2.Binary(pw_hash), role, staff_name.strip())
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
 
 def verify_login(username: str, password: str):
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
-                SELECT id, username, password_hash, role, staff_name, active
-                FROM users
-                WHERE username=%s
-            """, (username.strip(),))
-            row = cur.fetchone()
+    conn = get_conn()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id, username, password_hash, role, staff_name, active
+            FROM users
+            WHERE username=%s
+        """, (username.strip(),))
+        row = cur.fetchone()
+    finally:
+        conn.close()
 
-    if not row:
-        return None
-    if not row["active"]:
+    if not row or not row["active"]:
         return None
 
-    if bcrypt.checkpw(password.encode("utf-8"), bytes(row["password_hash"])):
+    pw_hash = bytes(row["password_hash"])
+    if bcrypt.checkpw(password.encode("utf-8"), pw_hash):
         return {
             "id": row["id"],
             "username": row["username"],
@@ -96,18 +165,28 @@ def verify_login(username: str, password: str):
         }
     return None
 
-def set_user_active(user_id: int, active: bool):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("UPDATE users SET active=%s WHERE id=%s", (active, user_id))
 
 def list_users():
-    with get_conn() as conn:
+    conn = get_conn()
+    try:
         return pd.read_sql("""
             SELECT id, username, role, staff_name, active, created_at
             FROM users
             ORDER BY role, staff_name
         """, conn)
+    finally:
+        conn.close()
+
+
+def set_user_active(user_id: int, active: bool):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET active=%s WHERE id=%s", (active, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
 
 def add_ticket(
     staff_id: int,
@@ -123,99 +202,121 @@ def add_ticket(
     net_to_supp: float,
     bill_to_customer: float
 ):
-    # If refund, store as negative values (easy totals)
+    # Refunds stored as negative values for correct totals
     if txn_type == "REFUND":
         basic_fare *= -1
         comm *= -1
         net_to_supp *= -1
         bill_to_customer *= -1
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO tickets(
-                    staff_user_id, travel_date, ai_code, ticket_number, passenger_name, route, supplier,
-                    txn_type, basic_fare, comm, net_to_supp, bill_to_customer
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            """, (
-                staff_id, travel_date, ai_code.strip(), ticket_number.strip(), passenger_name.strip(),
-                (route or "").strip(), (supplier or "").strip(),
-                txn_type, basic_fare, comm, net_to_supp, bill_to_customer
-            ))
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO tickets(
+                staff_user_id, travel_date, ai_code, ticket_number, passenger_name,
+                route, supplier, txn_type,
+                basic_fare, comm, net_to_supp, bill_to_customer
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (
+            staff_id, travel_date, ai_code.strip(), ticket_number.strip(), passenger_name.strip(),
+            (route or "").strip(), (supplier or "").strip(), txn_type,
+            float(basic_fare), float(comm), float(net_to_supp), float(bill_to_customer)
+        ))
+        conn.commit()
+    finally:
+        conn.close()
 
-def staff_tickets_df(staff_id: int, start_d=None, end_d=None):
-    q = """
-        SELECT travel_date AS "Date",
-               ai_code AS "AI Code",
-               ticket_number AS "Ticket Number",
-               passenger_name AS "Passenger Name",
-               route AS "Route",
-               supplier AS "Supplier",
-               txn_type AS "Type",
-               basic_fare AS "Basic Fare",
-               comm AS "Comm",
-               net_to_supp AS "Net to supp",
-               bill_to_customer AS "Bill to Customer",
-               created_at
-        FROM tickets
-        WHERE staff_user_id = %s
-    """
-    params = [staff_id]
-    if start_d and end_d:
-        q += " AND travel_date BETWEEN %s AND %s"
-        params += [start_d, end_d]
-    q += " ORDER BY travel_date DESC, id DESC"
 
-    with get_conn() as conn:
-        return pd.read_sql(q, conn, params=tuple(params))
+def staff_tickets_df(staff_id: int, start_d, end_d):
+    conn = get_conn()
+    try:
+        return pd.read_sql("""
+            SELECT travel_date AS "Date",
+                   ai_code AS "AI Code",
+                   ticket_number AS "Ticket Number",
+                   passenger_name AS "Passenger Name",
+                   route AS "Route",
+                   supplier AS "Supplier",
+                   txn_type AS "Type",
+                   basic_fare AS "Basic Fare",
+                   comm AS "Comm",
+                   net_to_supp AS "Net to supp",
+                   bill_to_customer AS "Bill to Customer",
+                   created_at
+            FROM tickets
+            WHERE staff_user_id=%s
+              AND travel_date BETWEEN %s AND %s
+            ORDER BY travel_date DESC, id DESC
+        """, conn, params=(staff_id, start_d, end_d))
+    finally:
+        conn.close()
 
-def all_tickets_df(start_d=None, end_d=None, staff_name=None):
-    q = """
-        SELECT t.travel_date AS "Date",
-               u.staff_name AS "Staff",
-               t.ai_code AS "AI Code",
-               t.ticket_number AS "Ticket Number",
-               t.passenger_name AS "Passenger Name",
-               t.route AS "Route",
-               t.supplier AS "Supplier",
-               t.txn_type AS "Type",
-               t.basic_fare AS "Basic Fare",
-               t.comm AS "Comm",
-               t.net_to_supp AS "Net to supp",
-               t.bill_to_customer AS "Bill to Customer",
-               t.created_at
-        FROM tickets t
-        JOIN users u ON u.id = t.staff_user_id
-        WHERE 1=1
-    """
-    params = []
-    if start_d and end_d:
-        q += " AND t.travel_date BETWEEN %s AND %s"
-        params += [start_d, end_d]
-    if staff_name and staff_name.strip():
-        q += " AND LOWER(u.staff_name) LIKE LOWER(%s)"
-        params += [f"%{staff_name.strip()}%"]
-    q += " ORDER BY t.travel_date DESC, t.id DESC"
 
-    with get_conn() as conn:
-        return pd.read_sql(q, conn, params=tuple(params))
+def all_tickets_df(start_d, end_d, staff_name_filter: str):
+    conn = get_conn()
+    try:
+        if staff_name_filter and staff_name_filter.strip():
+            return pd.read_sql("""
+                SELECT t.travel_date AS "Date",
+                       u.staff_name AS "Staff",
+                       t.ai_code AS "AI Code",
+                       t.ticket_number AS "Ticket Number",
+                       t.passenger_name AS "Passenger Name",
+                       t.route AS "Route",
+                       t.supplier AS "Supplier",
+                       t.txn_type AS "Type",
+                       t.basic_fare AS "Basic Fare",
+                       t.comm AS "Comm",
+                       t.net_to_supp AS "Net to supp",
+                       t.bill_to_customer AS "Bill to Customer",
+                       t.created_at
+                FROM tickets t
+                JOIN users u ON u.id = t.staff_user_id
+                WHERE t.travel_date BETWEEN %s AND %s
+                  AND LOWER(u.staff_name) LIKE LOWER(%s)
+                ORDER BY t.travel_date DESC, t.id DESC
+            """, conn, params=(start_d, end_d, f"%{staff_name_filter.strip()}%"))
+        else:
+            return pd.read_sql("""
+                SELECT t.travel_date AS "Date",
+                       u.staff_name AS "Staff",
+                       t.ai_code AS "AI Code",
+                       t.ticket_number AS "Ticket Number",
+                       t.passenger_name AS "Passenger Name",
+                       t.route AS "Route",
+                       t.supplier AS "Supplier",
+                       t.txn_type AS "Type",
+                       t.basic_fare AS "Basic Fare",
+                       t.comm AS "Comm",
+                       t.net_to_supp AS "Net to supp",
+                       t.bill_to_customer AS "Bill to Customer",
+                       t.created_at
+                FROM tickets t
+                JOIN users u ON u.id = t.staff_user_id
+                WHERE t.travel_date BETWEEN %s AND %s
+                ORDER BY t.travel_date DESC, t.id DESC
+            """, conn, params=(start_d, end_d))
+    finally:
+        conn.close()
 
-# -------------------- UI --------------------
-st.set_page_config(page_title="Ticketing App", layout="wide")
-st.title(APP_TITLE)
 
-# Safety: show clear message if DB not set
-if not DATABASE_URL:
-    st.error("DATABASE_URL is missing. Add it in Streamlit Cloud secrets (Settings → Secrets).")
+# -------------------- INIT DB SAFELY --------------------
+try:
+    init_db()
+except Exception:
+    st.error("Database connection failed. Check Streamlit Secrets DATABASE_URL, or use Neon non-pooler URL.")
+    st.info("Tip: In Neon connect dialog, try turning OFF 'Connection pooling' and copy the direct URL.")
     st.stop()
 
-# Init DB
-init_db()
 
+# -------------------- SESSION --------------------
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# First-time admin
+
+# -------------------- FIRST TIME ADMIN --------------------
 if not users_exist():
     st.warning("First time setup: Create ADMIN account")
     with st.form("create_admin"):
@@ -224,6 +325,7 @@ if not users_exist():
         a_pass = st.text_input("Admin Password", type="password")
         a_pass2 = st.text_input("Confirm Password", type="password")
         ok = st.form_submit_button("Create Admin")
+
     if ok:
         if not a_user or not a_name or not a_pass:
             st.error("Fill all fields.")
@@ -234,10 +336,11 @@ if not users_exist():
                 create_user(a_user, a_pass, "admin", a_name)
                 st.success("Admin created ✅ Now refresh and login.")
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Could not create admin: {e}")
     st.stop()
 
-# Login
+
+# -------------------- LOGIN --------------------
 if st.session_state.user is None:
     st.subheader("Login")
     u = st.text_input("Username")
@@ -251,9 +354,9 @@ if st.session_state.user is None:
             st.error("Invalid login or user inactive.")
     st.stop()
 
-user = st.session_state.user
 
-top1, top2 = st.columns([4,1])
+user = st.session_state.user
+top1, top2 = st.columns([4, 1])
 with top1:
     st.caption(f"Logged in as **{user['staff_name']}** ({user['role']})")
 with top2:
@@ -261,7 +364,8 @@ with top2:
         st.session_state.user = None
         st.rerun()
 
-# -------------------- STAFF PAGE --------------------
+
+# -------------------- STAFF UI --------------------
 if user["role"] == "staff":
     left, right = st.columns([1, 2])
 
@@ -270,6 +374,7 @@ if user["role"] == "staff":
         with st.form("ticket_form"):
             travel_date = st.date_input("Date", value=date.today())
             txn_type = st.selectbox("Type", ["SALE", "REFUND"])
+
             ai_code = st.text_input("AI Code *")
             ticket_number = st.text_input("Ticket Number *")
             passenger_name = st.text_input("Passenger Name *")
@@ -295,10 +400,10 @@ if user["role"] == "staff":
                 st.success("Saved ✅")
                 st.rerun()
 
-        st.info("Refunds are saved as negative amounts automatically (so totals become correct).")
+        st.info("Refund entries are stored as NEGATIVE amounts automatically.")
 
     with right:
-        st.markdown("### Your Tickets")
+        st.markdown("### Your Tickets (Filter)")
         f1, f2 = st.columns(2)
         with f1:
             start = st.date_input("From", value=date.today().replace(day=1), key="s_from")
@@ -316,10 +421,15 @@ if user["role"] == "staff":
             k4.metric("Bill to Customer", f"{df['Bill to Customer'].sum():,.2f}")
 
             export = df.drop(columns=["created_at"], errors="ignore")
-            csv_bytes = export.to_csv(index=False).encode("utf-8")
-            st.download_button("Download My CSV", data=csv_bytes, file_name="my_ticketing.csv", mime="text/csv")
+            st.download_button(
+                "Download My CSV",
+                data=export.to_csv(index=False).encode("utf-8"),
+                file_name="my_ticketing.csv",
+                mime="text/csv"
+            )
 
-# -------------------- ADMIN PAGE --------------------
+
+# -------------------- ADMIN UI --------------------
 else:
     st.markdown("## Admin Dashboard")
 
@@ -345,9 +455,12 @@ else:
             a4.metric("Bill to Customer", f"{df['Bill to Customer'].sum():,.2f}")
 
             export = df.drop(columns=["created_at"], errors="ignore")
-            csv_bytes = export.to_csv(index=False).encode("utf-8")
-            st.download_button("Download CSV (Filtered)", data=csv_bytes,
-                               file_name="all_ticketing_filtered.csv", mime="text/csv")
+            st.download_button(
+                "Download CSV (Filtered)",
+                data=export.to_csv(index=False).encode("utf-8"),
+                file_name="all_ticketing_filtered.csv",
+                mime="text/csv"
+            )
 
     with tab2:
         st.markdown("### Create Staff User")
@@ -356,6 +469,7 @@ else:
             nn = st.text_input("Staff Name")
             np = st.text_input("Password", type="password")
             create = st.form_submit_button("Create Staff")
+
         if create:
             if not nu.strip() or not nn.strip() or not np:
                 st.error("Fill all fields.")
