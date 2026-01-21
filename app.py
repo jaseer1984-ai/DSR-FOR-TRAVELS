@@ -115,7 +115,7 @@ def init_sheets():
     users_headers = ["username", "password_hash", "role", "staff_name", "active", "created_at"]
     entries_headers = [
         "Date", "Staff", "Entry Type", "AI Code", "Ticket Number", "Passenger Name",
-        "Route", "Supplier", "Ref No", "Bill to Customer", "Receipt", "ADM",
+        "Route", "Base Fare","Supplier", "Ref No", "Bill to Customer", "Receipt", "ADM",
         "Notes", "Created At"
     ]
 
@@ -550,6 +550,7 @@ else:
         admin_view(user)
     else:
         staff_view(user)
+
 
 
 
