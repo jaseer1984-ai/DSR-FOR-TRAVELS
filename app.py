@@ -6,7 +6,7 @@ from datetime import datetime, date
 from google.oauth2.service_account import Credentials
 
 # ===================== UI CONFIG =====================
-APP_TITLE = "✈️ Travel DSR (Sales • Refund • Receipt • ADM)"
+APP_TITLE = "✈️ Travel DSR "
 st.set_page_config(page_title="Travel DSR", layout="wide")
 
 CUSTOM_CSS = """
@@ -548,3 +548,4 @@ else:
         admin_view(user)
     else:
         staff_view(user)
+
