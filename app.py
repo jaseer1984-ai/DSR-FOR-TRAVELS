@@ -366,6 +366,7 @@ def staff_view(user):
                 "Ticket Number": ticket_no,
                 "Passenger Name": pax,
                 "Route": route,
+                "Base Fare": base fare,  
                 "Supplier": supplier,
                 "Ref No": ref_no,
                 "Bill to Customer": bill_to_customer,
@@ -548,4 +549,5 @@ else:
         admin_view(user)
     else:
         staff_view(user)
+
 
