@@ -6,17 +6,14 @@ from datetime import datetime, date
 from google.oauth2.service_account import Credentials
 
 # ===================== UI CONFIG =====================
-APP_TITLE = "✈️ Travel DSR "
+APP_TITLE = "✈️ Travel DSR"
 st.set_page_config(page_title="Travel DSR", layout="wide")
 
 CUSTOM_CSS = """
 <style>
-/* Page background */
 .main {
   background: linear-gradient(180deg, #f7f9ff 0%, #ffffff 55%, #ffffff 100%);
 }
-
-/* Gradient top header */
 .dsr-header {
   padding: 18px 18px;
   border-radius: 16px;
@@ -25,10 +22,7 @@ CUSTOM_CSS = """
   box-shadow: 0 10px 25px rgba(0,0,0,0.06);
   margin-bottom: 16px;
 }
-
 .small-muted { color: rgba(255,255,255,0.85); font-size: 14px; }
-
-/* Card */
 .card {
   background: #ffffff;
   border: 1px solid rgba(15,23,42,0.08);
@@ -36,14 +30,7 @@ CUSTOM_CSS = """
   padding: 14px 14px;
   box-shadow: 0 10px 25px rgba(0,0,0,0.04);
 }
-
-/* Login center */
-.login-wrap {
-  max-width: 520px;
-  margin: 0 auto;
-}
-
-/* Buttons */
+.login-wrap { max-width: 520px; margin: 0 auto; }
 div.stButton > button {
   border-radius: 12px;
   font-weight: 600;
@@ -98,24 +85,44 @@ def get_or_create_worksheet(sh, title: str, rows: int = 2000, cols: int = 30):
         return sh.add_worksheet(title=title, rows=str(rows), cols=str(cols))
 
 def ensure_headers(ws, headers: list[str]):
-    # If sheet empty -> set header row
+    """
+    - If sheet is empty -> write headers
+    - If row1 has blanks -> fill blanks with required headers (no overwrite of existing non-empty)
+    """
     existing = ws.row_values(1)
-    if not existing or all(x.strip() == "" for x in existing):
+
+    if not existing or all(str(x).strip() == "" for x in existing):
         ws.update("A1", [headers])
         return
-    # If headers not matching, don't overwrite automatically; you can adjust manually
-    # We only ensure it contains something.
+
+    if len(existing) < len(headers):
+        existing = existing + [""] * (len(headers) - len(existing))
+
+    changed = False
+    for i, h in enumerate(headers):
+        if str(existing[i]).strip() == "":
+            existing[i] = h
+            changed = True
+
+    if changed:
+        ws.update("A1", [existing[:len(headers)]])
 
 def init_sheets():
     sh = open_spreadsheet()
 
     ws_users = get_or_create_worksheet(sh, USERS_SHEET, rows=2000, cols=10)
-    ws_entries = get_or_create_worksheet(sh, ENTRIES_SHEET, rows=5000, cols=20)
+    ws_entries = get_or_create_worksheet(sh, ENTRIES_SHEET, rows=5000, cols=25)
 
     users_headers = ["username", "password_hash", "role", "staff_name", "active", "created_at"]
+
+    # ====== NEW ENTRIES HEADERS (your required fields) ======
     entries_headers = [
         "Date", "Staff", "Entry Type", "AI Code", "Ticket Number", "Passenger Name",
-        "Route", "Base Fare","Supplier", "Ref No", "Bill to Customer", "Receipt", "ADM",
+        "Route",
+        "Base Fare", "Tax", "Comm", "SC Supp", "VAT",
+        "Net to Supplier", "To Collect from Customer",
+        "Supplier", "Ref No",
+        "Receipt", "ADM",
         "Notes", "Created At"
     ]
 
@@ -130,14 +137,16 @@ def users_df(ws_users) -> pd.DataFrame:
     df = pd.DataFrame(data)
     if df.empty:
         return pd.DataFrame(columns=["username","password_hash","role","staff_name","active","created_at"])
-    # normalize
+
     for c in ["username","password_hash","role","staff_name"]:
         if c in df.columns:
             df[c] = df[c].astype(str)
+
     if "active" in df.columns:
         df["active"] = df["active"].astype(str).str.lower().isin(["true","1","yes","y"])
     else:
         df["active"] = True
+
     return df
 
 def hash_pw(password: str) -> str:
@@ -169,12 +178,11 @@ def add_user(ws_users, username: str, password: str, role: str, staff_name: str,
         staff_name,
         "TRUE" if active else "FALSE",
         datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ])
+    ], value_input_option="USER_ENTERED")
 
 def set_user_active(ws_users, username: str, active: bool):
-    # find row
     records = ws_users.get_all_records()
-    for i, r in enumerate(records, start=2):  # header is row 1
+    for i, r in enumerate(records, start=2):  # header row is 1
         if str(r.get("username","")).strip().lower() == username.strip().lower():
             ws_users.update(f"E{i}", "TRUE" if active else "FALSE")
             return True
@@ -188,7 +196,6 @@ def reset_user_password(ws_users, username: str, new_password: str):
             return True
     return False
 
-# Auto-create admin if users empty and secrets provided
 def ensure_admin(ws_users):
     df = users_df(ws_users)
     if not df.empty:
@@ -206,28 +213,36 @@ def ensure_admin(ws_users):
         st.stop()
 
 # ===================== ENTRIES =====================
+NUM_COLS = [
+    "Base Fare", "Tax", "Comm", "SC Supp", "VAT",
+    "Net to Supplier", "To Collect from Customer",
+    "Receipt", "ADM"
+]
+
 def entries_df(ws_entries) -> pd.DataFrame:
     data = ws_entries.get_all_records()
     df = pd.DataFrame(data)
     if df.empty:
         return pd.DataFrame(columns=[
             "Date","Staff","Entry Type","AI Code","Ticket Number","Passenger Name",
-            "Route", "Base Fare","Supplier","Ref No","Bill to Customer","Receipt","ADM","Notes","Created At"
+            "Route",
+            "Base Fare","Tax","Comm","SC Supp","VAT",
+            "Net to Supplier","To Collect from Customer",
+            "Supplier","Ref No",
+            "Receipt","ADM",
+            "Notes","Created At"
         ])
 
-    # numeric columns
-    for col in ["Bill to Customer", "Receipt", "ADM"]:
+    for col in NUM_COLS:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
-    # date parsing
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
 
     return df
 
 def append_entry(ws_entries, row: dict):
-    # Keep sheet column order consistent with headers
     out = [
         row.get("Date",""),
         row.get("Staff",""),
@@ -236,21 +251,34 @@ def append_entry(ws_entries, row: dict):
         row.get("Ticket Number",""),
         row.get("Passenger Name",""),
         row.get("Route",""),
-        row.get("Base Fare",""),
+
+        row.get("Base Fare",0),
+        row.get("Tax",0),
+        row.get("Comm",0),
+        row.get("SC Supp",0),
+        row.get("VAT",0),
+
+        row.get("Net to Supplier",0),
+        row.get("To Collect from Customer",0),
+
         row.get("Supplier",""),
         row.get("Ref No",""),
-        row.get("Bill to Customer",0),
+
         row.get("Receipt",0),
         row.get("ADM",0),
+
         row.get("Notes",""),
         row.get("Created At",""),
     ]
-    ws_entries.append_row(out)
+    ws_entries.append_row(out, value_input_option="USER_ENTERED")
 
 def calc_outstanding(df: pd.DataFrame) -> float:
     if df.empty:
         return 0.0
-    return float(df["Bill to Customer"].sum() + df["ADM"].sum() - df["Receipt"].sum())
+    to_collect = df.get("To Collect from Customer", 0).sum()
+    adm = df.get("ADM", 0).sum()
+    rec = df.get("Receipt", 0).sum()
+    return float(to_collect + adm - rec)
 
 # ===================== INIT =====================
 ws_users, ws_entries = init_sheets()
@@ -294,7 +322,6 @@ def login_view():
 def staff_view(user):
     st.markdown(f"**Logged in:** {user['staff_name']}  •  Role: `{user['role']}`")
 
-    # Load entries
     df = entries_df(ws_entries)
     mydf = df[df["Staff"].astype(str).str.lower() == user["staff_name"].strip().lower()].copy()
 
@@ -312,6 +339,7 @@ def staff_view(user):
 
     left, right = st.columns([1.1, 2.2], gap="large")
 
+    # ----- ADD ENTRY -----
     with left:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### ➕ Add Entry")
@@ -319,11 +347,13 @@ def staff_view(user):
         with st.form("entry_form"):
             entry_date = st.date_input("Date", value=date.today())
             entry_type = st.selectbox("Entry Type", ["SALE", "REFUND", "RECEIPT", "ADM"])
-
             notes = st.text_input("Notes (optional)")
 
+            # defaults
             ai_code = ticket_no = pax = route = supplier = ref_no = ""
-            bill = receipt = adm = 0.0
+            base_fare = tax = comm = sc_supp = 0.0
+            vat = net_to_supplier = to_collect = 0.0
+            receipt = adm = 0.0
 
             if entry_type in ["SALE", "REFUND"]:
                 ai_code = st.text_input("AI Code *")
@@ -332,7 +362,24 @@ def staff_view(user):
                 route = st.text_input("Route")
                 supplier = st.text_input("Supplier")
                 ref_no = st.text_input("Ref No (optional)")
-                bill = st.number_input("Bill to Customer", min_value=0.0, step=10.0)
+
+                base_fare = st.number_input("Base Fare", min_value=0.0, step=10.0)
+                tax = st.number_input("Tax", min_value=0.0, step=10.0)
+                comm = st.number_input("Comm", min_value=0.0, step=10.0)
+                sc_supp = st.number_input("SC Supp", min_value=0.0, step=10.0)
+
+                # Auto: VAT 15% of SC Supp
+                vat = round(sc_supp * 0.15, 2)
+
+                # Net = Base Fare + Tax - Comm + SC Supp + VAT
+                net_to_supplier = round(base_fare + tax - comm + sc_supp + vat, 2)
+
+                # To collect from customer (same as net for now)
+                to_collect = net_to_supplier
+
+                st.caption(f"VAT (15% of SC Supp): {vat:,.2f}")
+                st.caption(f"Net to Supplier: {net_to_supplier:,.2f}")
+                st.caption(f"To Collect from Customer: {to_collect:,.2f}")
 
             elif entry_type == "RECEIPT":
                 ref_no = st.text_input("Receipt Ref No *")
@@ -350,39 +397,112 @@ def staff_view(user):
                 if not ai_code.strip() or not ticket_no.strip() or not pax.strip():
                     st.error("AI Code, Ticket Number, Passenger Name are required.")
                     st.stop()
+
             if entry_type in ["RECEIPT","ADM"] and not ref_no.strip():
                 st.error("Ref No is required.")
                 st.stop()
 
-            # Refund stores bill negative
-            bill_to_customer = float(bill)
-            if entry_type == "REFUND":
-                bill_to_customer = -abs(bill_to_customer)
+            # Build row
+            if entry_type in ["SALE", "REFUND"]:
+                sign = -1 if entry_type == "REFUND" else 1
 
-            row = {
-                "Date": entry_date.strftime("%Y-%m-%d"),
-                "Staff": user["staff_name"],
-                "Entry Type": entry_type,
-                "AI Code": ai_code,
-                "Ticket Number": ticket_no,
-                "Passenger Name": pax,
-                "Route": route,
-                "Base Fare": base_fare,  
-                "Supplier": supplier,
-                "Ref No": ref_no,
-                "Bill to Customer": bill_to_customer,
-                "Receipt": float(receipt),
-                "ADM": float(adm),
-                "Notes": notes,
-                "Created At": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            append_entry(ws_entries, row)
-            st.success("Saved ✅")
-            st.rerun()
+                row = {
+                    "Date": entry_date.strftime("%Y-%m-%d"),
+                    "Staff": user["staff_name"],
+                    "Entry Type": entry_type,
+                    "AI Code": ai_code,
+                    "Ticket Number": ticket_no,
+                    "Passenger Name": pax,
+                    "Route": route,
 
-        st.info("Refund reduces Outstanding automatically (Bill to Customer saved negative).")
+                    "Base Fare": sign * float(base_fare),
+                    "Tax": sign * float(tax),
+                    "Comm": sign * float(comm),
+                    "SC Supp": sign * float(sc_supp),
+                    "VAT": sign * float(vat),
+
+                    "Net to Supplier": sign * float(net_to_supplier),
+                    "To Collect from Customer": sign * float(to_collect),
+
+                    "Supplier": supplier,
+                    "Ref No": ref_no,
+
+                    "Receipt": 0.0,
+                    "ADM": 0.0,
+
+                    "Notes": notes,
+                    "Created At": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+
+            elif entry_type == "RECEIPT":
+                row = {
+                    "Date": entry_date.strftime("%Y-%m-%d"),
+                    "Staff": user["staff_name"],
+                    "Entry Type": entry_type,
+                    "AI Code": "",
+                    "Ticket Number": "",
+                    "Passenger Name": "",
+                    "Route": "",
+
+                    "Base Fare": 0.0,
+                    "Tax": 0.0,
+                    "Comm": 0.0,
+                    "SC Supp": 0.0,
+                    "VAT": 0.0,
+                    "Net to Supplier": 0.0,
+                    "To Collect from Customer": 0.0,
+
+                    "Supplier": "",
+                    "Ref No": ref_no,
+
+                    "Receipt": float(receipt),
+                    "ADM": 0.0,
+
+                    "Notes": notes,
+                    "Created At": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+
+            else:  # ADM
+                row = {
+                    "Date": entry_date.strftime("%Y-%m-%d"),
+                    "Staff": user["staff_name"],
+                    "Entry Type": entry_type,
+                    "AI Code": "",
+                    "Ticket Number": "",
+                    "Passenger Name": "",
+                    "Route": "",
+
+                    "Base Fare": 0.0,
+                    "Tax": 0.0,
+                    "Comm": 0.0,
+                    "SC Supp": 0.0,
+                    "VAT": 0.0,
+                    "Net to Supplier": 0.0,
+                    "To Collect from Customer": 0.0,
+
+                    "Supplier": "",
+                    "Ref No": ref_no,
+
+                    "Receipt": 0.0,
+                    "ADM": float(adm),
+
+                    "Notes": notes,
+                    "Created At": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+
+            # Save (show real error if any)
+            try:
+                append_entry(ws_entries, row)
+                st.success("Saved ✅")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+                st.stop()
+
+        st.info("Refund auto-reverses amounts (Base Fare/Tax/Comm/SC Supp/VAT/Net/To Collect saved negative).")
         st.markdown("</div>", unsafe_allow_html=True)
 
+    # ----- YOUR ENTRIES TABLE -----
     with right:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 📄 Your Entries")
@@ -395,7 +515,7 @@ def staff_view(user):
 
         if not show.empty:
             k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Bill to Customer", f"{show['Bill to Customer'].sum():,.2f}")
+            k1.metric("To Collect", f"{show['To Collect from Customer'].sum():,.2f}")
             k2.metric("Receipt", f"{show['Receipt'].sum():,.2f}")
             k3.metric("ADM", f"{show['ADM'].sum():,.2f}")
             k4.metric("Outstanding", f"{calc_outstanding(show):,.2f}")
@@ -438,7 +558,7 @@ def admin_view(user):
 
         if not show.empty:
             k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Bill to Customer", f"{show['Bill to Customer'].sum():,.2f}")
+            k1.metric("To Collect", f"{show['To Collect from Customer'].sum():,.2f}")
             k2.metric("Receipt", f"{show['Receipt'].sum():,.2f}")
             k3.metric("ADM", f"{show['ADM'].sum():,.2f}")
             k4.metric("Outstanding", f"{calc_outstanding(show):,.2f}")
@@ -514,11 +634,11 @@ def admin_view(user):
             st.info("No data yet.")
         else:
             grp = df.groupby("Staff", as_index=False).agg({
-                "Bill to Customer": "sum",
+                "To Collect from Customer": "sum",
                 "Receipt": "sum",
                 "ADM": "sum"
             })
-            grp["Outstanding"] = grp["Bill to Customer"] + grp["ADM"] - grp["Receipt"]
+            grp["Outstanding"] = grp["To Collect from Customer"] + grp["ADM"] - grp["Receipt"]
             grp = grp.sort_values("Outstanding", ascending=False)
 
             st.dataframe(grp, use_container_width=True, hide_index=True)
@@ -550,9 +670,3 @@ else:
         admin_view(user)
     else:
         staff_view(user)
-
-
-
-
-
-
