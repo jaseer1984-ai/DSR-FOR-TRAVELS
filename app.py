@@ -236,6 +236,7 @@ def append_entry(ws_entries, row: dict):
         row.get("Ticket Number",""),
         row.get("Passenger Name",""),
         row.get("Route",""),
+        row.get("Base Fare",""),
         row.get("Supplier",""),
         row.get("Ref No",""),
         row.get("Bill to Customer",0),
@@ -549,5 +550,6 @@ else:
         admin_view(user)
     else:
         staff_view(user)
+
 
 
