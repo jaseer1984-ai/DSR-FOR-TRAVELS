@@ -212,7 +212,7 @@ def entries_df(ws_entries) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=[
             "Date","Staff","Entry Type","AI Code","Ticket Number","Passenger Name",
-            "Route","Supplier","Ref No","Bill to Customer","Receipt","ADM","Notes","Created At"
+            "Route", "Base Fare","Supplier","Ref No","Bill to Customer","Receipt","ADM","Notes","Created At"
         ])
 
     # numeric columns
@@ -550,6 +550,7 @@ else:
         admin_view(user)
     else:
         staff_view(user)
+
 
 
 
