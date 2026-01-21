@@ -11,9 +11,7 @@ st.set_page_config(page_title="Travel DSR", layout="wide")
 
 CUSTOM_CSS = """
 <style>
-.main {
-  background: linear-gradient(180deg, #f7f9ff 0%, #ffffff 55%, #ffffff 100%);
-}
+.main { background: linear-gradient(180deg, #f7f9ff 0%, #ffffff 55%, #ffffff 100%); }
 .dsr-header {
   padding: 18px 18px;
   border-radius: 16px;
@@ -31,11 +29,7 @@ CUSTOM_CSS = """
   box-shadow: 0 10px 25px rgba(0,0,0,0.04);
 }
 .login-wrap { max-width: 520px; margin: 0 auto; }
-div.stButton > button {
-  border-radius: 12px;
-  font-weight: 600;
-  padding: 10px 14px;
-}
+div.stButton > button { border-radius: 12px; font-weight: 600; padding: 10px 14px; }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -85,10 +79,6 @@ def get_or_create_worksheet(sh, title: str, rows: int = 2000, cols: int = 30):
         return sh.add_worksheet(title=title, rows=str(rows), cols=str(cols))
 
 def ensure_headers(ws, headers: list[str]):
-    """
-    - If sheet is empty -> write headers
-    - If row1 has blanks -> fill blanks with required headers (no overwrite of existing non-empty)
-    """
     existing = ws.row_values(1)
 
     if not existing or all(str(x).strip() == "" for x in existing):
@@ -115,7 +105,6 @@ def init_sheets():
 
     users_headers = ["username", "password_hash", "role", "staff_name", "active", "created_at"]
 
-    # ====== NEW ENTRIES HEADERS (your required fields) ======
     entries_headers = [
         "Date", "Staff", "Entry Type", "AI Code", "Ticket Number", "Passenger Name",
         "Route",
@@ -182,7 +171,7 @@ def add_user(ws_users, username: str, password: str, role: str, staff_name: str,
 
 def set_user_active(ws_users, username: str, active: bool):
     records = ws_users.get_all_records()
-    for i, r in enumerate(records, start=2):  # header row is 1
+    for i, r in enumerate(records, start=2):
         if str(r.get("username","")).strip().lower() == username.strip().lower():
             ws_users.update(f"E{i}", "TRUE" if active else "FALSE")
             return True
@@ -275,10 +264,7 @@ def append_entry(ws_entries, row: dict):
 def calc_outstanding(df: pd.DataFrame) -> float:
     if df.empty:
         return 0.0
-    to_collect = df.get("To Collect from Customer", 0).sum()
-    adm = df.get("ADM", 0).sum()
-    rec = df.get("Receipt", 0).sum()
-    return float(to_collect + adm - rec)
+    return float(df.get("To Collect from Customer", 0).sum() + df.get("ADM", 0).sum() - df.get("Receipt", 0).sum())
 
 # ===================== INIT =====================
 ws_users, ws_entries = init_sheets()
@@ -308,11 +294,7 @@ def login_view():
         elif not check_pw(password, str(u.get("password_hash",""))):
             st.error("Invalid login.")
         else:
-            st.session_state.user = {
-                "username": u["username"],
-                "role": u["role"],
-                "staff_name": u["staff_name"]
-            }
+            st.session_state.user = {"username": u["username"], "role": u["role"], "staff_name": u["staff_name"]}
             st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -368,13 +350,8 @@ def staff_view(user):
                 comm = st.number_input("Comm", min_value=0.0, step=10.0)
                 sc_supp = st.number_input("SC Supp", min_value=0.0, step=10.0)
 
-                # Auto: VAT 15% of SC Supp
                 vat = round(sc_supp * 0.15, 2)
-
-                # Net = Base Fare + Tax - Comm + SC Supp + VAT
                 net_to_supplier = round(base_fare + tax - comm + sc_supp + vat, 2)
-
-                # To collect from customer (same as net for now)
                 to_collect = net_to_supplier
 
                 st.caption(f"VAT (15% of SC Supp): {vat:,.2f}")
@@ -382,12 +359,20 @@ def staff_view(user):
                 st.caption(f"To Collect from Customer: {to_collect:,.2f}")
 
             elif entry_type == "RECEIPT":
+                supplier = st.text_input("Supplier (optional)")
                 ref_no = st.text_input("Receipt Ref No *")
                 receipt = st.number_input("Receipt Amount", min_value=0.0, step=10.0)
+                ticket_no = st.text_input("Ticket Number (optional)")
+                pax = st.text_input("Passenger Name (optional)")
+                st.caption(f"Receipt will reduce Outstanding by: {receipt:,.2f}")
 
             elif entry_type == "ADM":
+                supplier = st.text_input("Supplier (optional)")
                 ref_no = st.text_input("ADM Ref No *")
                 adm = st.number_input("ADM Amount", min_value=0.0, step=10.0)
+                ticket_no = st.text_input("Ticket Number (optional)")
+                pax = st.text_input("Passenger Name (optional)")
+                st.caption(f"ADM will increase Outstanding by: {adm:,.2f}")
 
             save = st.form_submit_button("✅ Save Entry")
 
@@ -440,8 +425,8 @@ def staff_view(user):
                     "Staff": user["staff_name"],
                     "Entry Type": entry_type,
                     "AI Code": "",
-                    "Ticket Number": "",
-                    "Passenger Name": "",
+                    "Ticket Number": ticket_no,
+                    "Passenger Name": pax,
                     "Route": "",
 
                     "Base Fare": 0.0,
@@ -452,7 +437,7 @@ def staff_view(user):
                     "Net to Supplier": 0.0,
                     "To Collect from Customer": 0.0,
 
-                    "Supplier": "",
+                    "Supplier": supplier,
                     "Ref No": ref_no,
 
                     "Receipt": float(receipt),
@@ -468,8 +453,8 @@ def staff_view(user):
                     "Staff": user["staff_name"],
                     "Entry Type": entry_type,
                     "AI Code": "",
-                    "Ticket Number": "",
-                    "Passenger Name": "",
+                    "Ticket Number": ticket_no,
+                    "Passenger Name": pax,
                     "Route": "",
 
                     "Base Fare": 0.0,
@@ -480,7 +465,7 @@ def staff_view(user):
                     "Net to Supplier": 0.0,
                     "To Collect from Customer": 0.0,
 
-                    "Supplier": "",
+                    "Supplier": supplier,
                     "Ref No": ref_no,
 
                     "Receipt": 0.0,
@@ -490,7 +475,6 @@ def staff_view(user):
                     "Created At": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 }
 
-            # Save (show real error if any)
             try:
                 append_entry(ws_entries, row)
                 st.success("Saved ✅")
@@ -499,7 +483,7 @@ def staff_view(user):
                 st.error(f"Save failed: {e}")
                 st.stop()
 
-        st.info("Refund auto-reverses amounts (Base Fare/Tax/Comm/SC Supp/VAT/Net/To Collect saved negative).")
+        st.info("Refund auto-reverses Sale amounts. Receipt reduces Outstanding. ADM increases Outstanding.")
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ----- YOUR ENTRIES TABLE -----
@@ -534,7 +518,6 @@ def admin_view(user):
 
     tabs = st.tabs(["📊 All Entries", "👥 Users", "📌 Outstanding by Staff"])
 
-    # ---- All Entries ----
     with tabs[0]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         df = entries_df(ws_entries)
@@ -569,10 +552,8 @@ def admin_view(user):
                 file_name="all_dsr_filtered.csv",
                 mime="text/csv"
             )
-
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # ---- Users ----
     with tabs[1]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### ➕ Create Staff User")
@@ -625,7 +606,6 @@ def admin_view(user):
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # ---- Outstanding by Staff ----
     with tabs[2]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         df = entries_df(ws_entries)
